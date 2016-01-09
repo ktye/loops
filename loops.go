@@ -1,6 +1,6 @@
 // Demonstration of Go concepts to solve Simulink style block computations
 //
-// See github.com/ktye/loops/?/README.md for a description // TODO fix path
+// See github.com/ktye/loops/blob/master/README.md for a description
 package loops
 
 // Simulation time step increment.
