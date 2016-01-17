@@ -179,6 +179,4 @@ func (s *System) Start() error {
 This is all there is to do make concurrency with goroutines work.
 
 # TODO
-- example code (ode1, ode2)
-- a simple `plot` block which produces a png.
 - a more interesting example of a nonlinear equation, such as a strange attractor.

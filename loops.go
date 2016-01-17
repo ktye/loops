@@ -3,6 +3,8 @@
 // See github.com/ktye/loops/blob/master/README.md for a description
 package loops
 
+import "fmt"
+
 // Simulation time step increment.
 var DT = 0.01
 
@@ -13,7 +15,7 @@ var DT = 0.01
 // Inputs and Outputs return the number of input and output
 // channels that the type requires.
 type Block interface {
-	Step([]float64, []float64)
+	Step([]float64, []float64) bool
 	Inputs() int
 	Outputs() int
 }
@@ -31,21 +33,24 @@ type ioBlock struct {
 type System struct {
 	In, Out     []chan float64
 	blocks      []ioBlock
+	initials    []IC
 	initialized bool
 }
 
-func (s *System) Inputs() int  { return len(s.in) }
-func (s *System) Outputs() int { return len(s.out) }
+func (s *System) Inputs() int  { return len(s.In) }
+func (s *System) Outputs() int { return len(s.Out) }
 func (s *System) Step(in, out []chan float64) {
 	// This is needed to start sub-systems only.
 	// The outer system is started manually.
-	if !initialized {
+	if !s.initialized {
 		s.Start()
 	}
 }
 
 // Additionally to the methods to satisfy the Block interface,
-// the system has methods add and connect blocks.
+// the system has methods to add and connect blocks.
+
+// Add adds a block to the system.
 func (s *System) Add(b Block) {
 	io := ioBlock{
 		Block: b,
@@ -55,33 +60,50 @@ func (s *System) Add(b Block) {
 	s.blocks = append(s.blocks, io)
 }
 
+// IC is an initial condition which is sent to a channel
+// on startup.
+type IC struct {
+	value float64 // value of the initial condition
+	block int     // block id the value is sent to
+	input int     // input number for the block
+}
+
+// Add adds the initial condition x to the input i of block dst.
+func (s *System) AddIC(x float64, dst, i int) {
+	s.initials = append(s.initials, IC{
+		value: x,
+		block: dst,
+		input: i,
+	})
+}
+
 // Connect creates a channel between src at output number o
 // and dst at input number i.
-func (s *System) Connect(src, dst int, i, o int) {
+func (s *System) Connect(src, dst, o, i int) {
 	c := make(chan float64)
 	if i < 0 {
-		s.Out[-i] = c
+		s.Out[-i-1] = c
 	} else {
-		s.blocks[dst][i] = c
+		s.blocks[dst].In[i] = c
 	}
 	if o < 0 {
-		s.In[-o] = c
+		s.In[-o-1] = c
 	} else {
-		s.blocks[src][o] = c
+		s.blocks[src].Out[o] = c
 	}
 }
 
-// Check checks if the system is set up correctly, that is
+// check checks if the system is set up correctly, that is
 // if all blocks are connected properly.
-func (s *System) Check() error {
+func (s *System) check() error {
 	for i, b := range s.blocks {
-		for k, c := range b[i].In {
-			if c == nli {
+		for k, c := range b.In {
+			if c == nil {
 				return fmt.Errorf("block %d input %d is not connected", i, k)
 			}
 		}
-		for k, c := range b[i].Out {
-			if c == nli {
+		for k, c := range b.Out {
+			if c == nil {
 				return fmt.Errorf("block %d output %d is not connected", i, k)
 			}
 		}
@@ -96,11 +118,13 @@ func (s *System) Start() error {
 		return err
 	}
 
+	done := make(chan bool)
+
 	// Create a goroutine for every block.
 	// The goroutine runs in the background.
 	// It's a function that loops for ever
 	// and calls the block's Step function each time.
-	for i, b := range s.blocks() {
+	for _, b := range s.blocks {
 		// Arrange input and output channels
 		// for the block's step function.
 		go func(in, out []chan float64, b Block) {
@@ -114,12 +138,23 @@ func (s *System) Start() error {
 						return
 					}
 				}
-				b.Step(x, y)
+				if b.Step(x, y) == false {
+					done <- true
+					return
+				}
 				for i, c := range out {
 					c <- y[i]
 				}
 			}
-		}(s.in[i], s.out[i], b)
+		}(b.In, b.Out, b.Block)
 	}
+
+	// Send initial conditions.
+	for _, ic := range s.initials {
+		s.blocks[ic.block].In[ic.input] <- ic.value
+	}
+
+	// Wait for the simulation to finish.
+	<-done
 	return nil
 }
