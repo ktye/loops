@@ -39,12 +39,13 @@ type System struct {
 
 func (s *System) Inputs() int  { return len(s.In) }
 func (s *System) Outputs() int { return len(s.Out) }
-func (s *System) Step(in, out []chan float64) {
+func (s *System) Step(in, out []chan float64) bool {
 	// This is needed to start sub-systems only.
 	// The outer system is started manually.
 	if !s.initialized {
 		s.Start()
 	}
+	return true
 }
 
 // Additionally to the methods to satisfy the Block interface,

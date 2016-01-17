@@ -30,10 +30,7 @@ With the system we can solve ordinary differential equation, such as the simple 
 ![ode1](doc/ode1.png)
 
 It is a linear equation of the variable x which evolves with time t.
-On the right hand side (RHS) may be any function of t, in this case it is 0 for all times, except the initial condition where it is x0.
-More generally we may write it as
-
-![rhs](doc/rhs.png)
+On the right hand side (RHS) may be any function of t, which in this case is 0 for all times.
 
 In the block diagram, we interprete everthing on the RHS as the system input and the evolving state of x as the system output.
 
@@ -42,20 +39,26 @@ In the block diagram, we interprete everthing on the RHS as the system input and
 If we plot the output x over time we get an exponential decay
 
 ![ode1plot](doc/ode1plot.png)
+![ode1result](ode1.png)
 
 ## 2nd order example
 The next example is slightly more interesting. It is a 2nd order equation and has the potential to generate an osillating solution which may grow or decay over time depending on the sign of the factor delta.
 
 ![ode2](doc/ode2.png)
 
+Every backward facing branch needs an initial condition.
+This corresponds to the mathematical requirements of the differential equation.
+In this case these are initial conditions for x and x'.
+
 ![ode2plot](doc/ode2plot.png)
+![ode2result](ode2.png)
 
 # Implementation
 ## Blocks
 A block is implemented as an [interface](https://golang.org/doc/effective_go.html#interfaces).
 ```go
 type Block interface {
-	Step([]float64, []float64)
+	Step([]float64, []float64) bool
 	Inputs() int
 	Outputs() int
 }
@@ -74,8 +77,9 @@ type Scale float64
 
 func (b Scale) Inputs() int  { return 1 }
 func (b Scale) Outputs() int { return 1 }
-func (b Scale) Step(in, out []float64) {
+func (b Scale) Step(in, out []float64) bool {
 	out[0] = float64(b) * in[0]
+	return true
 }
 ```
 
@@ -88,9 +92,10 @@ type Integrate struct {
 
 func (b *Integrate) Inputs() int  { return 1 }
 func (b *Integrate) Outputs() int { return 1 }
-func (b *Integrate) Step(in, out []float64) {
+func (b *Integrate) Step(in, out []float64) bool {
 	b.State += in[0] * DT
 	out[0] = b.State
+	return true
 }
 ```
 It needs to keep track of it's state as it has to remember what happened in the past: The integral sum is stored in the struct field State.
@@ -112,12 +117,13 @@ type System struct {
 
 func (s *System) Inputs() int  { return len(s.in) }
 func (s *System) Outputs() int { return len(s.out) }
-func (s *System) Step(in, out []chan float64) {
+func (s *System) Step(in, out []chan float64) bool {
 	// This is needed to start sub-systems only.
 	// The outer system is started manually.
 	if !initialized {
 		s.Start()
 	}
+	return true
 }
 ```
 
@@ -133,7 +139,14 @@ For the connections [go channels](https://golang.org/doc/effective_go.html#chann
 
 The connect method can be used to set them up.
 ```go
-func (s *System) Connect(src, dst int, i, o int)
+func (s *System) Connect(src, dst int, o, i int)
+```
+
+The system must also know about it's initial conditions.
+These are set up with the method
+```go
+// Add adds the initial condition x to the input i of block dst.
+func (s *System) AddIC(x float64, dst, i int)
 ```
 
 Finally the outer-most system is started with it's `Start` method.
@@ -146,6 +159,8 @@ func (s *System) Start() error {
 	if err := s.check(); err != nil {
 		return err
 	}
+
+	done := make(chan bool)
 
 	// Create a goroutine for every block.
 	// The goroutine runs in the background.
@@ -165,13 +180,25 @@ func (s *System) Start() error {
 						return
 					}
 				}
-				b.Step(x, y)
+				if b.Step(x, y) == false {
+					done <- true
+					return
+				}
 				for i, c := range out {
 					c <- y[i]
 				}
 			}
-		}(s.in[i], s.out[i], b)
+		}(b.In, b.Out, b.Block)
 	}
+	return nil
+
+	// Send initial conditions.
+	for _, ic := range s.initials {
+		s.blocks[ic.blocks].In[ic.input] <- ic.value
+	}
+	
+	// Wait for the simulation to finish.
+	<-done
 	return nil
 }
 ```
